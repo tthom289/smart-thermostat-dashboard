@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const Alexa = require('alexa-remote2');
+const history = require('./history');
 
 const PORT = Number(process.env.PORT || 8890);
 const PROXY_PORT = Number(process.env.PROXY_PORT || 3001);
@@ -16,6 +17,8 @@ const COOKIE_FILE = path.join(DATA_DIR, 'alexa-cookie.json');
 const VACATION_FILE = path.join(DATA_DIR, 'vacation.json');
 const POLL_MS = Number(process.env.POLL_SECONDS || 60) * 1000;
 const DEBUG = process.env.DEBUG === '1';
+// Port Grafana listens on (same host as this page). Empty = no History tab.
+const GRAFANA_PORT = /^\d{1,5}$/.test(process.env.GRAFANA_PORT || '') ? Number(process.env.GRAFANA_PORT) : null;
 // Host header allow-list: blocks DNS-rebinding tricks from websites you visit.
 const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || `${HOST_IP},localhost,127.0.0.1`)
   .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -56,6 +59,7 @@ const state = {
   message: '',
   loginUrl: null,
   thermostats: [],
+  airMonitors: [],
   updatedAt: null,
 };
 let alexa = null;
@@ -122,12 +126,10 @@ function startAlexa() {
         state.status = 'error';
         state.message = msg;
         log('Alexa init error:', msg);
-        // Network not ready yet (e.g. DNS right after a reboot): exit and let
-        // Docker's restart policy try again, instead of staying broken.
-        if (/EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH/.test(msg)) {
-          log('Network error; restarting in 30 s');
-          setTimeout(() => process.exit(1), 30000);
-        }
+        // Usually a network blip (DNS not ready after a reboot, Amazon timing out):
+        // exit and let Docker's restart policy try again, instead of staying broken.
+        log('Will restart and retry in 60 s');
+        setTimeout(() => process.exit(1), 60000);
       }
       return;
     }
@@ -184,13 +186,34 @@ const friendly = (res) => {
   return fn && fn.value && fn.value.text;
 };
 
+// Air quality monitor readings are RangeControllers; identify each by its name.
+const AIR_METRICS = [
+  [/Humidity/i, 'humidity'], [/CarbonMonoxide/i, 'co'], [/PM10/i, 'pm10'],
+  [/ParticulateMatter/i, 'pm25'], [/VolatileOrganicCompounds/i, 'voc'], [/IndoorAirQuality/i, 'iaq'],
+];
+function airMonitorFrom(d, la, caps) {
+  const instances = {};
+  for (const c of caps) {
+    if (!c || c.interfaceName !== 'Alexa.RangeController' || c.instance == null) continue;
+    const names = ((c.resources && c.resources.friendlyNames) || []).map(f => (f.value && (f.value.assetId || f.value.text)) || '').join(' ');
+    const hit = AIR_METRICS.find(([re]) => re.test(names));
+    if (hit) instances[String(c.instance)] = hit[1];
+  }
+  return { applianceId: la.applianceId, entityId: la.entityId, name: la.friendlyName || 'Air Quality Monitor', instances };
+}
+
 async function discover() {
   const res = await p(cb => alexa.getSmarthomeDevicesV2(cb));
   const found = [];
+  const air = [];
   for (const d of res || []) {
     const la = d.legacyAppliance || {};
     const caps = Array.isArray(la.capabilities) ? la.capabilities : [];
     const types = la.applianceTypes || [];
+    if (types.includes('AIR_QUALITY_MONITOR') && la.isEnabled !== false && la.applianceId) {
+      air.push(airMonitorFrom(d, la, caps));
+      continue;
+    }
     const isThermo = types.includes('THERMOSTAT') || caps.some(c => c && c.interfaceName === 'Alexa.ThermostatController');
     if (!isThermo || la.isEnabled === false || !la.applianceId) continue;
 
@@ -219,7 +242,9 @@ async function discover() {
     if (DEBUG) log('Thermostat capabilities:', JSON.stringify(caps));
   }
   state.thermostats = found.map(t => ({ ...(state.thermostats.find(o => o.applianceId === t.applianceId) || {}), ...t }));
+  state.airMonitors = air.map(m => ({ ...(state.airMonitors.find(o => o.applianceId === m.applianceId) || {}), ...m }));
   log(`Found ${found.length} thermostat(s):`, found.map(t => t.name).join(', ') || '(none)');
+  if (air.length) log(`Found ${air.length} air quality monitor(s):`, air.map(m => m.name).join(', '));
 }
 
 function parseTemp(v) {
@@ -235,19 +260,25 @@ async function refresh(force = false) {
   if (!force && Date.now() - lastRefresh < 8000) return;
   if (refreshing) return refreshing;
   refreshing = (async () => {
-    const reqs = state.thermostats.map(t => ({ entityId: t.applianceId, entityType: 'APPLIANCE' }));
+    const reqs = [...state.thermostats, ...state.airMonitors].map(t => ({ entityId: t.applianceId, entityType: 'APPLIANCE' }));
     const res = await p(cb => alexa.querySmarthomeDevices(reqs, 'APPLIANCE', 20000, cb));
     if (DEBUG) log('State response:', JSON.stringify(res));
+    const fresh = new Set();   // devices Amazon actually returned state for in this poll
     for (const ds of (res && res.deviceStates) || []) {
       const id = ds.entity && ds.entity.entityId;
+      const m = state.airMonitors.find(x => x.applianceId === id || x.entityId === id);
+      if (m) { readAirMonitor(m, ds.capabilityStates || []); fresh.add(m.applianceId); continue; }
       const t = state.thermostats.find(x => x.applianceId === id || x.entityId === id);
       if (!t) continue;
+      fresh.add(t.applianceId);
       for (let cap of ds.capabilityStates || []) {
         try { cap = typeof cap === 'string' ? JSON.parse(cap) : cap; } catch { continue; }
         const { namespace: ns, name, value, instance } = cap;
         if (ns === 'Alexa.TemperatureSensor' && name === 'preciseTemperature') t.precise = parseTemp(value);
         else if (ns === 'Alexa.TemperatureSensor' && name === 'temperature') t.current = parseTemp(value);
         else if (ns === 'Alexa.HumiditySensor' && name === 'relativeHumidity') t.humidity = Number(plain(value));
+        else if (ns === 'Alexa.ThermostatController.ExternalTemperatureSensor' && name === 'temperature') t.externalTemp = parseTemp(value);
+        else if (ns === 'Alexa.ThermostatController.ExternalTemperatureSensor' && name === 'mode') t.sensorMode = String(plain(value));
         else if (ns === 'Alexa.ThermostatController') {
           if (name === 'targetSetpoint') t.target = parseTemp(value);
           else if (name === 'lowerSetpoint') t.lower = parseTemp(value);
@@ -278,13 +309,28 @@ async function refresh(force = false) {
     }
     for (const e of (res && res.errors) || []) {
       const id = e.entity && e.entity.entityId;
-      const t = state.thermostats.find(x => x.applianceId === id || x.entityId === id);
+      const t = [...state.thermostats, ...state.airMonitors].find(x => x.applianceId === id || x.entityId === id);
       if (t) t.error = e.code || 'UNKNOWN_ERROR';
     }
     lastRefresh = Date.now();
     state.updatedAt = new Date().toISOString();
+    // Log to history at most every 20 s (page views also trigger refreshes).
+    if (fresh.size && Date.now() - lastRecord >= 20000) { lastRecord = Date.now(); history.record(state, fresh); }
   })().finally(() => { refreshing = null; });
   return refreshing;
+}
+let lastRecord = 0;
+
+function readAirMonitor(m, capStates) {
+  m.values = m.values || {};
+  for (let cap of capStates) {
+    try { cap = typeof cap === 'string' ? JSON.parse(cap) : cap; } catch { continue; }
+    const { namespace: ns, name, value, instance } = cap;
+    if (ns === 'Alexa.TemperatureSensor' && name === 'temperature') m.temp = parseTemp(value);
+    else if (ns === 'Alexa.RangeController' && name === 'rangeValue' && m.instances[String(instance)]) m.values[m.instances[String(instance)]] = Number(plain(value));
+    else if (ns === 'Alexa.EndpointHealth' && name === 'connectivity') m.online = String(plain(value)).toUpperCase() === 'OK';
+  }
+  m.error = null;
 }
 
 // ---------- limits ----------
@@ -461,8 +507,14 @@ async function startVacationNow(v) {
     scheduleEnabled: t.scheduleEnabled !== false,
     lower: t.lower && t.lower.value, upper: t.upper && t.upper.value, target: t.target && t.target.value,
   };
-  if (t.scheduleEnabled !== false) await setScheduleEnabled(t, false);
-  await applyHold(t, v.lower, v.upper);
+  try {
+    if (t.scheduleEnabled !== false) await setScheduleEnabled(t, false);
+    await applyHold(t, v.lower, v.upper);
+  } catch (e) {
+    history.command(t, `Start vacation hold ${v.lower}°–${v.upper}°`, null, false, e.message, 'vacation');
+    throw e;
+  }
+  history.command(t, `Start vacation hold ${v.lower}°–${v.upper}°`, ['schedule_on', 'heat_to_f', 'cool_to_f', 'target_f'], true, null, 'vacation');
   v.active = true;
   v.startedAt = new Date().toISOString();
   saveVacation();
@@ -474,9 +526,15 @@ async function endVacationNow(reason) {
   const t = v && state.thermostats.find(x => x.applianceId === v.applianceId);
   if (v && v.active && t) {
     const prev = v.prev || {};
-    if (prev.scheduleEnabled) await setScheduleEnabled(t, true);
-    else if (t.mode === 'AUTO' && prev.lower != null && prev.upper != null) await setRange(t, prev.lower, prev.upper);
-    else if (prev.target != null && (t.mode === 'HEAT' || t.mode === 'COOL')) await setTarget(t, prev.target);
+    try {
+      if (prev.scheduleEnabled) await setScheduleEnabled(t, true);
+      else if (t.mode === 'AUTO' && prev.lower != null && prev.upper != null) await setRange(t, prev.lower, prev.upper);
+      else if (prev.target != null && (t.mode === 'HEAT' || t.mode === 'COOL')) await setTarget(t, prev.target);
+    } catch (e) {
+      history.command(t, `End vacation hold (${reason})`, null, false, e.message, 'vacation');
+      throw e;
+    }
+    history.command(t, `End vacation hold (${reason})`, ['schedule_on', 'heat_to_f', 'cool_to_f', 'target_f'], true, null, 'vacation');
   }
   log(`Vacation ended (${reason})`);
   vacation = null;
@@ -517,6 +575,24 @@ async function createVacation(t, body) {
 
 function httpErr(code, msg) { const e = new Error(msg); e.status = code; return e; }
 
+// Human-readable text for the history log, plus the reading fields the command changes.
+function describeCommand(sub, method, b) {
+  const d = (v) => `${v}°`;
+  if (!sub) {
+    if (b.mode !== undefined) return [`Set mode to ${String(b.mode).toUpperCase()}`, ['mode']];
+    if (b.lower !== undefined || b.upper !== undefined) return [`Set heat-to ${d(b.lower)} / cool-to ${d(b.upper)}`, ['heat_to_f', 'cool_to_f']];
+    if (b.target !== undefined) return [`Set temperature to ${d(b.target)}`, ['target_f']];
+    if (b.scheduleEnabled !== undefined) return [`Turn schedule ${b.scheduleEnabled ? 'on' : 'off'}`, ['schedule_on']];
+    if (b.adaptiveRecovery !== undefined) return [`Turn adaptive recovery ${b.adaptiveRecovery ? 'on' : 'off'}`, []];
+    if (b.fan !== undefined) return [`Set fan to ${String(b.fan).toUpperCase()}`, ['fan']];
+    return ['Unknown command', []];
+  }
+  if (sub === 'schedule') return ['Save weekly schedule', []];
+  if (sub === 'preferred') return [`Set ${String(b.activity).toLowerCase()} temperatures to ${d(b.lower)}–${d(b.upper)} in schedule`, []];
+  if (sub === 'vacation' && method === 'POST') return [`Schedule vacation ${d(b.lower)}–${d(b.upper)} until ${b.end}`, []];
+  return [`${method} ${sub}`, []];
+}
+
 // ---------- http ----------
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
@@ -525,15 +601,17 @@ const STATIC = {
   '/icon.svg': ['icon.svg', 'image/svg+xml'],
 };
 
-function send(res, status, body, type = 'application/json') {
+function send(res, status, body, type = 'application/json', host = null) {
   const data = typeof body === 'string' ? body : JSON.stringify(body);
+  // The History tab embeds Grafana from the same host the page was opened with.
+  const frame = GRAFANA_PORT && host ? `frame-src http://${host}:${GRAFANA_PORT}; ` : '';
   res.writeHead(status, {
     'Content-Type': type,
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+    'Content-Security-Policy': `default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; ${frame}frame-ancestors 'none'`,
   });
   res.end(data);
 }
@@ -548,6 +626,8 @@ function publicState() {
     thermostats: state.thermostats.map(({ entityId, endpointId, fanInstance, fanModes, hvac, ...t }) => ({
       ...t, fanOptions: Object.keys(fanModes || {}), limits: limits(t), minGap: MIN_GAP,
     })),
+    airMonitors: state.airMonitors.map(({ entityId, instances, ...m }) => m),
+    history: { enabled: history.enabled(), grafanaPort: GRAFANA_PORT },
   };
 }
 
@@ -569,7 +649,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && STATIC[url.pathname]) {
       const [file, type] = STATIC[url.pathname];
-      return send(res, 200, fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8'), type);
+      return send(res, 200, fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8'), type, host);
     }
     if (req.method === 'GET' && url.pathname === '/api/status') {
       if (state.status === 'ready') await refresh(false).catch(e => log('Refresh failed:', e.message));
@@ -600,10 +680,16 @@ const server = http.createServer(async (req, res) => {
       if (m) {
         const t = findT();
         const body = await readBody(req);
-        if (!m[2] && req.method === 'POST') { await control(t, body); return send(res, 200, publicState()); }
-        if (m[2] === 'schedule' && req.method === 'POST') return send(res, 200, await saveSchedule(t, body));
-        if (m[2] === 'preferred' && req.method === 'POST') return send(res, 200, await setPreferred(t, body.activity, Number(body.lower), Number(body.upper)));
-        if (m[2] === 'vacation' && req.method === 'POST') { await createVacation(t, body); return send(res, 200, publicState()); }
+        // Run one action and write it to the history event log (success or failure).
+        const logged = async (fn) => {
+          const [text, fields] = describeCommand(m[2], req.method, body);
+          try { const out = await fn(); history.command(t, text, fields, true); return out; }
+          catch (e) { history.command(t, text, null, false, e.message); throw e; }
+        };
+        if (!m[2] && req.method === 'POST') { await logged(() => control(t, body)); return send(res, 200, publicState()); }
+        if (m[2] === 'schedule' && req.method === 'POST') return send(res, 200, await logged(() => saveSchedule(t, body)));
+        if (m[2] === 'preferred' && req.method === 'POST') return send(res, 200, await logged(() => setPreferred(t, body.activity, Number(body.lower), Number(body.upper))));
+        if (m[2] === 'vacation' && req.method === 'POST') { await logged(() => createVacation(t, body)); return send(res, 200, publicState()); }
         if (m[2] === 'vacation' && req.method === 'DELETE') {
           if (!vacation) return send(res, 404, { error: 'No vacation set' });
           await endVacationNow('cancelled');
@@ -622,4 +708,5 @@ server.listen(PORT, '0.0.0.0', () => log(`Thermostat Web on http://${HOST_IP}:${
 setInterval(() => { if (state.status === 'ready') refresh(true).catch(e => log('Poll failed:', e.message)); }, POLL_MS);
 setInterval(() => vacationTick(), 30000);
 process.on('SIGTERM', () => { log('Stopping'); process.exit(0); });
+history.open();
 startAlexa();

@@ -7,4 +7,4 @@ COPY app ./app
 ENV NODE_ENV=production DATA_DIR=/data
 USER node
 EXPOSE 8890 3001
-CMD ["node", "app/server.js"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "app/server.js"]

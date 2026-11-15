@@ -1,0 +1,14 @@
+apiVersion: 1
+datasources:
+  - name: Thermostat history
+    uid: thermostat-history
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      path: /history/history.sqlite3
+      pathPrefix: "file:"
+      # Read-only queries: Grafana never changes the history.
+      pathOptions: "_pragma=query_only(1)"
+      attachLimit: 0

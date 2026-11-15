@@ -1,5 +1,7 @@
 # Your Amazon session, schedule backups, vacation state. Never commit.
 data/
+history/
+grafana-data/
 .env
 
 node_modules/

@@ -33,6 +33,8 @@ The Amazon Smart Thermostat is the only thermostat Amazon makes, and it's the on
 - **Now:** current temperature and humidity, heat-to/cool-to setpoints, mode (Heat/Cool/Auto/Off), fan (Auto/On/Circulate), schedule on/off, and whether it's heating or cooling.
 - **Schedule:** a weekly schedule editor (add or remove entries, copy one day to others), plus Home/Sleep/Away "preferred temperatures" that update every matching schedule entry at once.
 - **Vacation:** pauses the schedule, holds the temperatures you pick, and turns the schedule back on at your return time. It survives restarts.
+- **Air quality monitor:** if you have an Amazon Indoor Air Quality Monitor on the same account, its readings (temperature, humidity, PM2.5, PM10, VOC, carbon monoxide, air score) show on the Now tab.
+- **History (Grafana):** every poll is logged to a SQLite file on your server, and a History tab shows it in a ready-made Grafana dashboard. See [History and energy tracking](#history-and-energy-tracking).
 - Installs to your phone's home screen (PWA).
 
 ## How it works
@@ -50,10 +52,13 @@ git clone https://github.com/tthom289/smart-thermostat-dashboard.git
 cd smart-thermostat-dashboard
 cp .env.example .env        # set HOST_IP to this machine's LAN IP
 mkdir -m 700 data           # holds your Amazon session
+mkdir history grafana-data  # history database and Grafana's own data
 docker compose up -d --build
 ```
 
-> The container runs as user ID 1000. If your user ID isn't 1000 (check with `id -u`), run `sudo chown 1000:1000 data`.
+> The containers run as user ID 1000. If your user ID isn't 1000 (check with `id -u`), run `sudo chown 1000:1000 data history grafana-data`.
+
+Grafana downloads its SQLite plugin on first start, so the first launch needs internet access.
 
 **Link your Amazon account:**
 
@@ -63,6 +68,25 @@ docker compose up -d --build
 
 To sign in again from scratch, delete `data/alexa-cookie.json` and run `docker compose restart`.
 
+## History and energy tracking
+
+The app logs everything it sees to `history.sqlite3` in `HISTORY_DIR`, and the History tab embeds a Grafana dashboard built on it. You can also open Grafana directly at `http://<HOST_IP>:3010`.
+
+**What's logged:**
+
+- **Readings, every poll:** thermostat temperature, humidity, setpoints, mode, fan, schedule period, and the remote sensor the thermostat is using (if any). Also every reading from air quality monitors.
+- **HVAC run cycles:** when the heat, AC and blower turned on and off, and how long each ran.
+- **Setting changes:** what changed and who most likely changed it: this app, the schedule, or "Alexa / thermostat" (the Alexa app, voice, or the thermostat itself).
+- **Commands:** every command sent from this app, and whether Amazon accepted it.
+
+**The dashboard shows:** runtime and cycle counts for the selected time range; temperature against setpoints; a timeline of when the system was heating or cooling; **runtime per day and per month**; humidity and air quality; and a searchable event log.
+
+**Comparing with your energy bill:** set the time range to your billing period. The heating and cooling runtime totals are the closest thing to energy use this app can measure; the thermostat doesn't report kWh or gas usage. Runtime is measured from polls, so with the default 60-second poll each cycle is accurate to about a minute. Set `POLL_SECONDS=30` for finer detail.
+
+Set `TZ` to your time zone so "per day" totals split at your local midnight. If you change it later, past days are recalculated automatically.
+
+The database grows by roughly 200 MB a year at a 30-second poll (about half that at 60 seconds). Back up `HISTORY_DIR` like any other important data.
+
 ## Configuration (`.env`)
 
 | Variable | Default | Purpose |
@@ -70,11 +94,15 @@ To sign in again from scratch, delete `data/alexa-cookie.json` and run `docker c
 | `HOST_IP` | *(required)* | The LAN IP you open the page with. Also used for the sign-in link. |
 | `EXTRA_ALLOWED_HOSTS` | *(empty)* | Other hostnames or IPs you'll open the page with, comma-separated (e.g. a hostname or a Tailscale IP). |
 | `POLL_SECONDS` | `60` | How often to fetch the thermostat's state from Amazon. |
+| `TZ` | `UTC` | Your time zone, e.g. `America/Chicago`. Used for per-day runtime totals. |
+| `HISTORY_DIR` | `./history` | Folder for the history database. Point it at a large disk if you like. |
+| `GRAFANA_PORT` | `3010` | Port for Grafana (the History tab). |
+| `GRAFANA_ADMIN_PASSWORD` | *(required)* | Grafana admin password. Only needed to edit dashboards; viewing needs no login. |
 | `DEBUG` | `0` | Set to `1` to log raw Amazon responses. These logs contain account and device identifiers. |
 
 ## Security
 
-- **This is for your home network only. Never port-forward 8890 or 3001.** The page has no login of its own, so anyone who can reach it can change your temperature. For remote access, use a VPN such as Tailscale or WireGuard and add its address to `EXTRA_ALLOWED_HOSTS`.
+- **This is for your home network only. Never port-forward 8890, 3001 or 3010.** Grafana lets anyone on your network view the history without logging in (read-only). The page has no login of its own, so anyone who can reach it can change your temperature. For remote access, use a VPN such as Tailscale or WireGuard and add its address to `EXTRA_ALLOWED_HOSTS`.
 - **`data/alexa-cookie.json` is an Amazon login.** Keep it private and never commit it (it's already in `.gitignore`).
 - The container is locked down: read-only filesystem, all Linux capabilities dropped, `no-new-privileges`, and a 256 MB memory limit.
 - A Host-header allow-list blocks DNS-rebinding attacks. Changes require a custom header and a JSON body, which blocks cross-site request forgery from other websites.
