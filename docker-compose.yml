@@ -1,0 +1,39 @@
+# Smart Thermostat Dashboard
+#   cp .env.example .env   # then set HOST_IP to this machine's LAN IP
+#   docker compose up -d --build
+# UI:    http://<HOST_IP>:8890
+# Login: http://<HOST_IP>:3001  (Amazon sign-in proxy; only listens until you've logged in)
+# ./data/alexa-cookie.json holds your Amazon session. Treat it like a password.
+# Never port-forward 8890 or 3001 on your router.
+
+name: thermostat
+
+services:
+  thermostat:
+    container_name: thermostat
+    build: .
+    image: smart-thermostat-dashboard:local
+    restart: unless-stopped
+    ports:
+      - "8890:8890"
+      - "3001:3001"
+    environment:
+      HOST_IP: "${HOST_IP:?Set HOST_IP in .env (copy .env.example)}"
+      ALLOWED_HOSTS: "${HOST_IP},localhost,127.0.0.1${EXTRA_ALLOWED_HOSTS:+,}${EXTRA_ALLOWED_HOSTS:-}"
+      POLL_SECONDS: "${POLL_SECONDS:-60}"
+      DEBUG: "${DEBUG:-0}"
+    volumes:
+      - ./data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

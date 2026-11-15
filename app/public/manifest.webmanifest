@@ -1,0 +1,3 @@
+{ "name": "Thermostat", "short_name": "Thermostat", "start_url": "/", "display": "standalone",
+  "background_color": "#16181b", "theme_color": "#16181b",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }] }

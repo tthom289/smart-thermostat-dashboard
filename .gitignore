@@ -1,0 +1,7 @@
+# Your Amazon session, schedule backups, vacation state. Never commit.
+data/
+.env
+
+node_modules/
+*.bak*
+*.log

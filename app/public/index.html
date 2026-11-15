@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f1ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16181b" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Thermostat</title>
+<style>
+  :root {
+    --bg: #f4f1ec; --card: #ffffff; --ink: #1d1f22; --muted: #6b6f76; --line: #e4e0d9; --field: #f6f4f0;
+    --heat: #d9642b; --heat-soft: #fbe6da; --cool: #2b7bd9; --cool-soft: #dceafb;
+    --auto: #6a55c9; --auto-soft: #e8e3fa; --off: #8a8f96; --off-soft: #eceef0; --ok: #2e9b5f; --ok-soft: #dcf2e5;
+    --warn-bg: #fff4d6; --warn-ink: #6b4e00; --err-bg: #fde2e2; --err-ink: #8a1c1c;
+    --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181b; --card: #212429; --ink: #eef0f2; --muted: #9aa0a8; --line: #33373e; --field: #2a2d33;
+      --heat: #f0864e; --heat-soft: #3d2a1f; --cool: #5ea2f0; --cool-soft: #1e2c3f;
+      --auto: #9a88ec; --auto-soft: #2b2742; --off: #9aa0a8; --off-soft: #2a2d33; --ok: #4cc283; --ok-soft: #1d3428;
+      --warn-bg: #3a3017; --warn-ink: #f3d68a; --err-bg: #3f2020; --err-ink: #f4b4b4;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(90px, calc(env(safe-area-inset-bottom) + 80px));
+    min-height: 100vh;
+  }
+  main { max-width: 480px; margin: 0 auto; }
+  header { display: flex; align-items: center; justify-content: space-between; margin: 4px 2px 16px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .hint { color: var(--muted); font-size: 13px; margin: -6px 0 12px; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; border: 0; background: none; }
+  .icon-btn { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: var(--muted); }
+  .icon-btn:active { background: var(--line); }
+  .spin svg { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .banner { border-radius: 14px; padding: 14px 16px; margin-bottom: 14px; font-size: 15px; }
+  .banner.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .banner.err { background: var(--err-bg); color: var(--err-ink); }
+  .banner.ok { background: var(--ok-soft); color: var(--ok); }
+  .banner a { color: inherit; font-weight: 650; }
+  .banner ol { margin: 8px 0 0; padding-left: 20px; }
+
+  .card { background: var(--card); border-radius: 22px; box-shadow: var(--shadow); padding: 20px; margin-bottom: 16px; }
+  .card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .name { font-weight: 650; font-size: 17px; }
+  .pill { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 99px; background: var(--off-soft); color: var(--muted); white-space: nowrap; }
+  .pill.bad { background: var(--err-bg); color: var(--err-ink); }
+  .pill.HEATING { background: var(--heat-soft); color: var(--heat); }
+  .pill.COOLING { background: var(--cool-soft); color: var(--cool); }
+  .pill.vac { background: var(--ok-soft); color: var(--ok); }
+
+  .now { text-align: center; margin: 14px 0 4px; }
+  .now-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+  .now-temp { font-size: 64px; font-weight: 300; line-height: 1.05; font-variant-numeric: tabular-nums; letter-spacing: -.03em; }
+  .now-temp sup { font-size: 24px; font-weight: 400; vertical-align: 28px; margin-left: 2px; }
+  .now-sub { color: var(--muted); font-size: 14px; }
+
+  .setpoints { display: grid; gap: 12px; margin: 18px 0 16px; }
+  .sp { display: grid; grid-template-columns: 64px 1fr 64px; align-items: center; border-radius: 18px; padding: 10px; background: var(--sp-soft); }
+  .heat { --sp: var(--heat); --sp-soft: var(--heat-soft); }
+  .cool { --sp: var(--cool); --sp-soft: var(--cool-soft); }
+  .off  { --sp: var(--off);  --sp-soft: var(--off-soft); }
+  .sp-mid { text-align: center; }
+  .sp-label { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--sp); }
+  .sp-val { font-size: 40px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .sp-val.pending { opacity: .55; }
+  .step { width: 64px; height: 64px; border-radius: 16px; background: var(--card); color: var(--sp); font-size: 32px; font-weight: 500; display: grid; place-items: center; box-shadow: 0 1px 2px rgba(0,0,0,.08); touch-action: manipulation; user-select: none; }
+  .step:active { transform: scale(.95); }
+  .off-note { text-align: center; color: var(--muted); padding: 22px 10px; }
+
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; background: var(--off-soft); padding: 5px; border-radius: 16px; }
+  .seg button { height: 42px; border-radius: 12px; font-weight: 600; font-size: 14px; color: var(--muted); }
+  .seg button.on { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.12); color: var(--ink); }
+  .seg button.on.HEAT { color: var(--heat); } .seg button.on.COOL { color: var(--cool); } .seg button.on.AUTO { color: var(--auto); }
+  .row-label { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 2px 6px; }
+
+  .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px 2px; }
+  .switch-row .t { font-weight: 600; } .switch-row .s { color: var(--muted); font-size: 13px; }
+  .switch { position: relative; width: 52px; height: 32px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 99px; transition: .2s; }
+  .switch span::after { content: ""; position: absolute; width: 26px; height: 26px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .switch input:checked + span { background: var(--ok); }
+  .switch input:checked + span::after { transform: translateX(20px); }
+
+  /* preferred temps */
+  .pref { display: grid; grid-template-columns: 70px 1fr 1fr; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+  .pref:first-of-type { border-top: 0; }
+  .pref .act { font-weight: 650; }
+  .mini { display: grid; grid-template-columns: 36px 1fr 36px; align-items: center; background: var(--sp-soft); border-radius: 12px; padding: 4px; }
+  .mini button { width: 36px; height: 36px; border-radius: 9px; background: var(--card); color: var(--sp); font-size: 20px; font-weight: 600; }
+  .mini .v { text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .mini .v small { display: block; font-size: 10px; font-weight: 650; color: var(--sp); text-transform: uppercase; letter-spacing: .05em; line-height: 1; }
+
+  /* schedule */
+  .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 14px; }
+  .days button { height: 40px; border-radius: 10px; font-size: 13px; font-weight: 650; color: var(--muted); background: var(--off-soft); }
+  .days button.on { background: var(--ink); color: var(--bg); }
+  .days button.dirty::after { content: "•"; color: var(--heat); margin-left: 1px; }
+  .entry { background: var(--field); border-radius: 16px; padding: 12px; margin-bottom: 10px; display: grid; gap: 10px; }
+  .entry-top { display: grid; grid-template-columns: 1fr 1fr 40px; gap: 8px; align-items: center; }
+  .entry-temps { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; align-items: center; }
+  input[type=time], input[type=datetime-local], select, input[type=number] {
+    width: 100%; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); padding: 0 10px; min-width: 0;
+  }
+  .lbl { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 3px; }
+  .lbl.h { color: var(--heat); } .lbl.c { color: var(--cool); }
+  .del { width: 40px; height: 40px; border-radius: 10px; color: var(--err-ink); font-size: 20px; }
+  .del:active { background: var(--err-bg); }
+  .btn { height: 44px; padding: 0 16px; border-radius: 12px; font-weight: 650; background: var(--off-soft); }
+  .btn.primary { background: var(--ink); color: var(--bg); }
+  .btn.danger { background: var(--err-bg); color: var(--err-ink); }
+  .btn:disabled { opacity: .45; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn-row .btn { flex: 1; }
+  .copy-to { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 2px; }
+  .copy-to label { display: flex; align-items: center; gap: 4px; background: var(--off-soft); border-radius: 10px; padding: 6px 10px; font-size: 14px; }
+  .savebar { position: sticky; bottom: calc(env(safe-area-inset-bottom) + 76px); background: var(--card); box-shadow: var(--shadow); border-radius: 16px; padding: 10px; display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .savebar .meta { flex: 1; padding-left: 6px; }
+
+  /* vacation */
+  .form-grid { display: grid; gap: 12px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .vac-summary { font-size: 15px; line-height: 1.6; }
+  .vac-summary b { font-weight: 650; }
+
+  /* tabs */
+  nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
+    padding: 6px 12px max(8px, env(safe-area-inset-bottom)); display: flex; justify-content: center; z-index: 5; }
+  nav.tabs .in { display: grid; grid-template-columns: repeat(3, 1fr); max-width: 480px; width: 100%; }
+  nav.tabs button { height: 56px; border-radius: 12px; display: grid; place-items: center; gap: 0; font-size: 12px; font-weight: 600; color: var(--muted); padding: 6px 0; }
+  nav.tabs button svg { width: 24px; height: 24px; }
+  nav.tabs button.on { color: var(--ink); }
+
+  .toast { position: fixed; left: 50%; bottom: calc(max(20px, env(safe-area-inset-bottom)) + 80px); transform: translateX(-50%) translateY(30px); opacity: 0;
+    background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; transition: .2s; max-width: calc(100% - 32px); pointer-events: none; z-index: 10; }
+  .toast.show { opacity: 1; transform: translateX(-50%); }
+  .empty { text-align: center; color: var(--muted); padding: 30px 10px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1 id="title">Thermostat</h1>
+      <div class="meta" id="updated">Connecting…</div>
+    </div>
+    <button class="icon-btn" id="refresh" aria-label="Refresh">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+    </button>
+  </header>
+  <div id="banner"></div>
+  <section id="tab-now"></section>
+  <section id="tab-schedule" hidden></section>
+  <section id="tab-vacation" hidden></section>
+</main>
+
+<nav class="tabs"><div class="in">
+  <button data-tab="now" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/></svg>Now</button>
+  <button data-tab="schedule"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Schedule</button>
+  <button data-tab="vacation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg>Vacation</button>
+</div></nav>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const MODE_LABEL = { HEAT: 'Heat', COOL: 'Cool', AUTO: 'Auto', OFF: 'Off', ECO: 'Eco', EM_HEAT: 'Em Heat' };
+const FAN_LABEL = { AUTO: 'Auto', ON: 'On', CIRCULATE: 'Circulate' };
+const ACT_LABEL = { HOME: 'Home', AWAY: 'Away', SLEEP: 'Sleep' };
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let data = null;
+let tab = 'now';
+const pending = {};           // quick setpoint taps: applianceId -> { target|lower|upper, timer }
+let sched = null;             // { scale, days } working copy being edited
+let schedOrig = null;         // JSON of last saved schedule, to detect edits
+let schedDay = DAYS[(new Date().getDay() + 6) % 7];
+let schedLoading = false;
+let prefDraft = {};           // activity -> { lower, upper }
+let busy = false;
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2800);
+}
+async function api(path, body, method) {
+  const opts = body === undefined && !method ? {} : {
+    method: method || 'POST', headers: { 'Content-Type': 'application/json', 'X-Thermostat': '1' }, body: JSON.stringify(body || {}),
+  };
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+const T = () => data && data.thermostats[0];   // single-thermostat home; first one is used
+const tUrl = (t, sub = '') => '/api/thermostat/' + encodeURIComponent(t.applianceId) + sub;
+const fmt = (t) => (t && t.value != null ? Math.round(t.value * 2) / 2 : '–');
+const unit = (t) => (t && t.scale === 'CELSIUS' ? 'C' : 'F');
+const hhmm = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+const nice = (m) => { const h = Math.floor(m / 60), mm = m % 60; return `${h % 12 || 12}:${String(mm).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+const toMin = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; };
+const dtLocal = (d) => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 16); };
+const when = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+async function load(manual) {
+  const btn = $('#refresh');
+  if (manual) btn.classList.add('spin');
+  try {
+    data = manual ? await api('/api/refresh', {}) : await api('/api/status');
+    if (manual && tab === 'schedule') await loadSchedule(true);
+    render();
+  } catch (e) {
+    if (manual) toast(e.message); else $('#updated').textContent = 'Server unreachable';
+  } finally { btn.classList.remove('spin'); }
+}
+
+function render() {
+  const b = $('#banner');
+  if (data.status === 'needs_login') {
+    b.innerHTML = `<div class="banner warn"><strong>Link your Amazon account</strong>
+      <ol><li>Open <a href="${esc(data.loginUrl)}" target="_blank" rel="noopener">${esc(data.loginUrl)}</a></li>
+      <li>Sign in to Amazon (with 2-step code if asked)</li>
+      <li>When it says the login succeeded, come back here</li></ol></div>`;
+  } else if (data.status === 'error') b.innerHTML = `<div class="banner err"><strong>Problem:</strong> ${esc(data.message)}</div>`;
+  else if (data.status === 'starting') b.innerHTML = `<div class="banner warn">Connecting to Amazon…</div>`;
+  else if (data.vacation && data.vacation.active && tab !== 'vacation') b.innerHTML = `<div class="banner ok">Vacation hold until ${esc(when(data.vacation.end))}</div>`;
+  else b.innerHTML = '';
+
+  $('#updated').textContent = data.updatedAt
+    ? 'Updated ' + new Date(data.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : (data.status === 'ready' ? 'Loading…' : '');
+  const t = T();
+  $('#title').textContent = t ? t.name : 'Thermostat';
+
+  for (const name of ['now', 'schedule', 'vacation']) $('#tab-' + name).hidden = tab !== name;
+  document.querySelectorAll('nav.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === tab));
+
+  if (data.status === 'ready' && !t) { $('#tab-' + tab).innerHTML = `<div class="empty">No thermostats found on this Amazon account.</div>`; return; }
+  if (!t) { $('#tab-' + tab).innerHTML = ''; return; }
+  if (tab === 'now') renderNow(t);
+  if (tab === 'schedule') renderSchedule(t);
+  if (tab === 'vacation') renderVacation(t);
+}
+
+// ---------------- NOW ----------------
+function renderNow(t) {
+  const p = pending[t.applianceId] || {};
+  const mode = t.mode || 'OFF';
+  const u = unit(t.current || t.target);
+  let status = '';
+  if (t.error) status = `<span class="pill bad">${esc(t.error.replace(/_/g, ' ').toLowerCase())}</span>`;
+  else if (t.online === false) status = `<span class="pill bad">offline</span>`;
+  else if (data.vacation && data.vacation.active) status = `<span class="pill vac">Vacation</span>`;
+  else if (t.running) status = `<span class="pill ${t.running}">${t.running === 'IDLE' ? 'Idle' : t.running === 'FAN' ? 'Fan running' : t.running[0] + t.running.slice(1).toLowerCase()}</span>`;
+
+  const sp = (kind, label, key, val) => `
+    <div class="sp ${kind}">
+      <button class="step" data-act="bump" data-key="${key}" data-d="-1" aria-label="Lower ${label}">−</button>
+      <div class="sp-mid"><div class="sp-label">${label}</div>
+        <div class="sp-val ${p[key] != null ? 'pending' : ''}">${p[key] != null ? p[key] : fmt(val)}°</div></div>
+      <button class="step" data-act="bump" data-key="${key}" data-d="1" aria-label="Raise ${label}">+</button>
+    </div>`;
+  let sps;
+  if (mode === 'OFF') sps = `<div class="off-note">System is off</div>`;
+  else if (mode === 'AUTO') sps = sp('heat', 'Heat to', 'lower', t.lower) + sp('cool', 'Cool to', 'upper', t.upper);
+  else sps = sp(mode === 'COOL' ? 'cool' : 'heat', mode === 'COOL' ? 'Cool to' : 'Heat to', 'target', t.target);
+
+  const modes = t.supportedModes.map(m => `<button class="${esc(m)} ${m === mode ? 'on' : ''}" data-act="mode" data-v="${esc(m)}">${esc(MODE_LABEL[m] || m)}</button>`).join('');
+  const fans = (t.fanOptions || []).length ? `<div class="row-label">Fan</div><div class="seg">${['AUTO', 'ON', 'CIRCULATE'].filter(f => t.fanOptions.includes(f))
+    .map(f => `<button class="${f === t.fan ? 'on' : ''}" data-act="fan" data-v="${f}">${FAN_LABEL[f]}</button>`).join('')}</div>` : '';
+  const subs = [];
+  if (t.humidity != null && !isNaN(t.humidity)) subs.push(`${t.humidity}% humidity`);
+  if (t.scheduleEnabled && t.activity && ACT_LABEL[t.activity]) subs.push(`${ACT_LABEL[t.activity]} period`);
+
+  $('#tab-now').innerHTML = `<section class="card">
+    <div class="card-top"><div class="name">Inside now</div>${status}</div>
+    <div class="now"><div class="now-temp">${t.precise ? Math.round(t.precise.value * 10) / 10 : fmt(t.current)}<sup>°${u}</sup></div>
+      <div class="now-sub">${esc(subs.join(' · '))}</div></div>
+    <div class="setpoints">${sps}</div>
+    <div class="row-label">Mode</div><div class="seg">${modes}</div>
+    ${fans}
+    ${t.hasSchedule ? `<div class="switch-row"><div><div class="t">Follow schedule</div>
+      <div class="s">${t.scheduleEnabled ? 'Manual changes last until the next scheduled period' : 'Off: temperatures stay where you set them'}</div></div>
+      <label class="switch"><input type="checkbox" data-act="schedtoggle" ${t.scheduleEnabled ? 'checked' : ''}><span></span></label></div>` : ''}
+  </section>`;
+}
+
+function bump(key, d) {
+  const t = T();
+  const p = pending[t.applianceId] = pending[t.applianceId] || {};
+  const gap = t.minGap || 3;
+  const cur = p[key] != null ? p[key] : Math.round(((t[key] && t[key].value) ?? (t.current && t.current.value) ?? 70));
+  p[key] = cur + d;
+  if (key === 'lower' && t.upper && p[key] > (p.upper ?? t.upper.value) - gap) p[key] = (p.upper ?? t.upper.value) - gap;
+  if (key === 'upper' && t.lower && p[key] < (p.lower ?? t.lower.value) + gap) p[key] = (p.lower ?? t.lower.value) + gap;
+  render();
+  clearTimeout(p.timer);
+  p.timer = setTimeout(() => commitSetpoint(t.applianceId), 1200);   // wait until taps stop, then send once
+}
+async function commitSetpoint(id) {
+  const t = data.thermostats.find(x => x.applianceId === id);
+  const p = pending[id]; if (!p) return;
+  const body = p.target != null ? { target: p.target } : { lower: p.lower ?? t.lower?.value, upper: p.upper ?? t.upper?.value };
+  try {
+    data = await api(tUrl(t), body);
+    delete pending[id]; render();
+    toast(body.target != null ? `Set to ${body.target}°` : `Range ${body.lower}°–${body.upper}°`);
+  } catch (err) { delete pending[id]; render(); toast('Failed: ' + err.message); }
+}
+async function quick(body, okMsg, optimistic) {
+  const t = T(); const snapshot = JSON.stringify(t);
+  optimistic && optimistic(t); render();
+  try { data = await api(tUrl(t), body); render(); toast(okMsg); }
+  catch (err) { Object.assign(t, JSON.parse(snapshot)); render(); toast('Failed: ' + err.message); }
+}
+
+// ---------------- SCHEDULE ----------------
+async function loadSchedule(force) {
+  const t = T(); if (!t || (sched && !force) || schedLoading) return;
+  schedLoading = true; render();
+  try { sched = await api(tUrl(t, '/schedule')); schedOrig = JSON.stringify(sched.days); prefDraft = {}; }
+  catch (e) { toast('Could not load schedule: ' + e.message); }
+  finally { schedLoading = false; render(); }
+}
+const schedDirty = () => sched && JSON.stringify(sched.days) !== schedOrig;
+const dayDirty = (d) => sched && schedOrig && JSON.stringify(sched.days[d]) !== JSON.stringify(JSON.parse(schedOrig)[d]);
+
+// Most common heat/cool per activity across the week = the "preferred temperature".
+function preferredFromSchedule() {
+  const out = {};
+  for (const a of ['HOME', 'AWAY', 'SLEEP']) {
+    const counts = {};
+    for (const d of DAYS) for (const e of JSON.parse(schedOrig || '{}')[d] || []) if (e.activity === a) { const k = e.lower + '/' + e.upper; counts[k] = (counts[k] || 0) + 1; }
+    const best = Object.entries(counts).sort((x, y) => y[1] - x[1])[0];
+    out[a] = best ? { lower: Number(best[0].split('/')[0]), upper: Number(best[0].split('/')[1]), mixed: Object.keys(counts).length > 1 } : null;
+  }
+  return out;
+}
+
+function renderSchedule(t) {
+  const el = $('#tab-schedule');
+  if (!t.hasSchedule) { el.innerHTML = `<div class="card empty">This thermostat doesn't support schedules.</div>`; return; }
+  if (!sched) { el.innerHTML = `<div class="card empty">${schedLoading ? 'Loading schedule…' : 'Schedule not loaded.'}</div>`; loadSchedule(); return; }
+  const L = t.limits, gap = t.minGap || 3;
+  const prefs = preferredFromSchedule();
+
+  const prefRows = ['HOME', 'AWAY', 'SLEEP'].map(a => {
+    const base = prefs[a]; const dr = prefDraft[a] || (base && { lower: base.lower, upper: base.upper });
+    if (!dr) return `<div class="pref"><div class="act">${ACT_LABEL[a]}</div><div class="meta" style="grid-column: span 2">No ${ACT_LABEL[a].toLowerCase()} periods in schedule</div></div>`;
+    const changed = prefDraft[a] && base && (prefDraft[a].lower !== base.lower || prefDraft[a].upper !== base.upper);
+    return `<div class="pref"><div><div class="act">${ACT_LABEL[a]}</div>${base.mixed && !changed ? '<div class="meta">varies</div>' : ''}</div>
+      <div class="mini heat"><button data-act="pref" data-a="${a}" data-k="lower" data-d="-1">−</button><div class="v"><small>Heat</small>${dr.lower}°</div><button data-act="pref" data-a="${a}" data-k="lower" data-d="1">+</button></div>
+      <div class="mini cool"><button data-act="pref" data-a="${a}" data-k="upper" data-d="-1">−</button><div class="v"><small>Cool</small>${dr.upper}°</div><button data-act="pref" data-a="${a}" data-k="upper" data-d="1">+</button></div>
+      ${changed ? `<div style="grid-column: 1 / -1" class="btn-row"><button class="btn" data-act="prefcancel" data-a="${a}">Cancel</button><button class="btn primary" data-act="prefsave" data-a="${a}" ${busy ? 'disabled' : ''}>Apply to all ${ACT_LABEL[a]} periods</button></div>` : ''}
+    </div>`;
+  }).join('');
+
+  const entries = sched.days[schedDay];
+  const entryHtml = entries.map((e, i) => `
+    <div class="entry">
+      <div class="entry-top">
+        <div><div class="lbl">Starts</div><input type="time" value="${hhmm(e.start)}" data-act="ed" data-i="${i}" data-f="start" step="300"></div>
+        <div><div class="lbl">Period</div><select data-act="ed" data-i="${i}" data-f="activity">
+          ${['HOME', 'AWAY', 'SLEEP'].map(a => `<option value="${a}" ${e.activity === a ? 'selected' : ''}>${ACT_LABEL[a]}</option>`).join('')}
+          ${!e.activity ? '<option value="" selected>—</option>' : ''}</select></div>
+        <div><div class="lbl">&nbsp;</div><button class="del" data-act="del" data-i="${i}" aria-label="Delete entry">✕</button></div>
+      </div>
+      <div class="entry-temps">
+        <div><div class="lbl h">Heat to</div><input type="number" inputmode="numeric" min="${L.heatMin}" max="${L.heatMax}" value="${e.lower}" data-act="ed" data-i="${i}" data-f="lower"></div>
+        <div><div class="lbl c">Cool to</div><input type="number" inputmode="numeric" min="${L.coolMin}" max="${L.coolMax}" value="${e.upper}" data-act="ed" data-i="${i}" data-f="upper"></div>
+        <div><div class="lbl">Fan</div><select data-act="ed" data-i="${i}" data-f="fan">
+          ${['AUTO', 'ON', 'CIRCULATE'].map(f => `<option value="${f}" ${(e.fan || 'AUTO') === f ? 'selected' : ''}>${FAN_LABEL[f]}</option>`).join('')}</select></div>
+      </div>
+    </div>`).join('') || `<div class="empty">No entries. The previous day's last setting carries over.</div>`;
+
+  el.innerHTML = `
+    <section class="card">
+      <h2>Preferred temperatures</h2>
+      <div class="hint">Changing one updates every matching period in your weekly schedule.</div>
+      ${prefRows}
+    </section>
+    <section class="card">
+      <h2>Weekly schedule</h2>
+      <div class="hint">Each entry runs until the next one starts. Heat-to and cool-to are used together in Auto mode. Heat mode uses heat-to only; Cool mode uses cool-to only.</div>
+      <div class="days">${DAYS.map(d => `<button class="${d === schedDay ? 'on' : ''} ${dayDirty(d) ? 'dirty' : ''}" data-act="day" data-d="${d}">${d.slice(0, 2)}</button>`).join('')}</div>
+      <div class="row-label" style="margin-top:0">${schedDay}</div>
+      ${entryHtml}
+      <div class="btn-row">
+        <button class="btn" data-act="add" ${entries.length >= t.maxEntriesPerDay ? 'disabled' : ''}>+ Add entry</button>
+        <button class="btn" data-act="copyshow">Copy ${schedDay.slice(0, 3)} to…</button>
+      </div>
+      <div id="copybox" hidden>
+        <div class="copy-to">${DAYS.filter(d => d !== schedDay).map(d => `<label><input type="checkbox" value="${d}">${d.slice(0, 3)}</label>`).join('')}</div>
+        <div class="btn-row" style="margin-top:8px"><button class="btn" data-act="copyweekdays">Weekdays</button><button class="btn primary" data-act="copydo">Copy</button></div>
+      </div>
+    </section>
+    ${schedDirty() ? `<div class="savebar"><div class="meta">Unsaved changes</div>
+      <button class="btn" data-act="revert">Discard</button><button class="btn primary" data-act="save" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : 'Save schedule'}</button></div>` : ''}`;
+}
+
+async function saveSchedule() {
+  const t = T();
+  for (const d of DAYS) for (const e of sched.days[d]) if (e.upper - e.lower < (t.minGap || 3)) { schedDay = d; render(); return toast(`${d}: cool-to must be ${t.minGap || 3}° above heat-to`); }
+  busy = true; render();
+  try { sched = await api(tUrl(t, '/schedule'), sched); schedOrig = JSON.stringify(sched.days); toast('Schedule saved'); }
+  catch (e) { toast('Save failed: ' + e.message); }
+  finally { busy = false; render(); }
+}
+
+// ---------------- VACATION ----------------
+function renderVacation(t) {
+  const v = data.vacation;
+  const el = $('#tab-vacation');
+  if (v) {
+    el.innerHTML = `<section class="card">
+      <h2>${v.active ? 'Vacation hold is on' : 'Vacation scheduled'}</h2>
+      <div class="vac-summary">
+        ${v.active ? '' : `Starts <b>${esc(when(v.start))}</b><br>`}
+        Ends <b>${esc(when(v.end))}</b><br>
+        Holding heat-to <b>${v.lower}°</b> · cool-to <b>${v.upper}°</b><br>
+        <span class="meta">${v.active ? 'Your schedule is paused. It turns back on automatically at the return time.' : 'Your schedule keeps running until the start time.'}</span>
+      </div>
+      ${v.lastError ? `<div class="banner err" style="margin-top:12px">Last attempt failed, retrying: ${esc(v.lastError)}</div>` : ''}
+      <div class="btn-row" style="margin-top:16px"><button class="btn danger" data-act="vacend" ${busy ? 'disabled' : ''}>${v.active ? 'End vacation now' : 'Cancel'}</button></div>
+    </section>`;
+    return;
+  }
+  const prefs = sched ? preferredFromSchedule() : {};
+  const away = prefs.AWAY || { lower: 62, upper: 82 };
+  const now = new Date(); const ret = new Date(now.getTime() + 7 * 864e5); ret.setHours(15, 0, 0, 0);
+  el.innerHTML = `<section class="card">
+    <h2>Vacation</h2>
+    <div class="hint">Pauses your schedule and holds energy-saving temperatures while you're away. Your schedule turns back on automatically when you return.</div>
+    <div class="form-grid">
+      <div class="seg" id="vacwhen"><button class="on" data-act="vacnow" data-v="now">Start now</button><button data-act="vacnow" data-v="later">Start later</button></div>
+      <div id="vacstartwrap" hidden><div class="lbl">Leaving</div><input type="datetime-local" id="vacstart" value="${dtLocal(new Date(now.getTime() + 864e5))}"></div>
+      <div><div class="lbl">Returning</div><input type="datetime-local" id="vacend" value="${dtLocal(ret)}"></div>
+      <div class="two">
+        <div><div class="lbl h">Heat to (keep above)</div><input type="number" inputmode="numeric" id="vaclower" value="${Math.min(away.lower, 62)}" min="${t.limits.heatMin}" max="${t.limits.heatMax}"></div>
+        <div><div class="lbl c">Cool to (keep below)</div><input type="number" inputmode="numeric" id="vacupper" value="${Math.max(away.upper, 82)}" min="${t.limits.coolMin}" max="${t.limits.coolMax}"></div>
+      </div>
+      <div class="meta">Mode stays ${esc(MODE_LABEL[t.mode] || t.mode)}${t.mode === 'HEAT' ? ' (uses heat-to)' : t.mode === 'COOL' ? ' (uses cool-to)' : t.mode === 'OFF' ? ' (nothing is held while off)' : ''}.</div>
+      <button class="btn primary" data-act="vacgo" ${busy ? 'disabled' : ''}>Set vacation</button>
+    </div>
+  </section>`;
+  if (!sched && !schedLoading) loadSchedule();
+}
+
+// ---------------- events ----------------
+document.addEventListener('click', async (e) => {
+  const tb = e.target.closest('nav.tabs button');
+  if (tb) { tab = tb.dataset.tab; render(); window.scrollTo(0, 0); return; }
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const act = el.dataset.act; const t = T();
+  if (act === 'bump') return bump(el.dataset.key, Number(el.dataset.d));
+  if (act === 'mode' && !el.classList.contains('on')) return quick({ mode: el.dataset.v }, `Mode: ${MODE_LABEL[el.dataset.v] || el.dataset.v}`, x => { x.mode = el.dataset.v; });
+  if (act === 'fan' && !el.classList.contains('on')) return quick({ fan: el.dataset.v }, `Fan: ${FAN_LABEL[el.dataset.v]}`, x => { x.fan = el.dataset.v; });
+
+  // schedule
+  if (act === 'day') { schedDay = el.dataset.d; return render(); }
+  if (act === 'add') {
+    const list = sched.days[schedDay]; const last = list[list.length - 1];
+    const start = last ? Math.min(last.start + 120, 1435) : 420;
+    if (list.some(x => x.start === start)) return toast('Change the last entry time first');
+    const pr = preferredFromSchedule().HOME;
+    list.push({ start, lower: last ? last.lower : (pr ? pr.lower : 68), upper: last ? last.upper : (pr ? pr.upper : 74), fan: 'AUTO', activity: 'HOME' });
+    return render();
+  }
+  if (act === 'del') { sched.days[schedDay].splice(Number(el.dataset.i), 1); return render(); }
+  if (act === 'copyshow') { $('#copybox').hidden = !$('#copybox').hidden; return; }
+  if (act === 'copyweekdays') { document.querySelectorAll('#copybox input').forEach(c => { c.checked = DAYS.slice(0, 5).includes(c.value); }); return; }
+  if (act === 'copydo') {
+    const targets = [...document.querySelectorAll('#copybox input:checked')].map(c => c.value);
+    if (!targets.length) return toast('Pick at least one day');
+    for (const d of targets) sched.days[d] = JSON.parse(JSON.stringify(sched.days[schedDay]));
+    render(); return toast(`Copied to ${targets.map(d => d.slice(0, 3)).join(', ')}. Save to apply.`);
+  }
+  if (act === 'revert') { sched.days = JSON.parse(schedOrig); return render(); }
+  if (act === 'save') return saveSchedule();
+
+  // preferred temps
+  if (act === 'pref') {
+    const a = el.dataset.a, k = el.dataset.k, d = Number(el.dataset.d), gap = t.minGap || 3;
+    const base = preferredFromSchedule()[a];
+    const dr = prefDraft[a] = prefDraft[a] || { lower: base.lower, upper: base.upper };
+    dr[k] += d;
+    if (k === 'lower' && dr.upper - dr.lower < gap) dr.lower = dr.upper - gap;
+    if (k === 'upper' && dr.upper - dr.lower < gap) dr.upper = dr.lower + gap;
+    return render();
+  }
+  if (act === 'prefcancel') { delete prefDraft[el.dataset.a]; return render(); }
+  if (act === 'prefsave') {
+    if (schedDirty()) return toast('Save or discard your schedule edits first');
+    const a = el.dataset.a; busy = true; render();
+    try { sched = await api(tUrl(t, '/preferred'), { activity: a, ...prefDraft[a] }); schedOrig = JSON.stringify(sched.days); delete prefDraft[a]; toast(`${ACT_LABEL[a]} temperatures updated`); }
+    catch (err) { toast('Failed: ' + err.message); }
+    finally { busy = false; render(); }
+    return;
+  }
+
+  // vacation
+  if (act === 'vacnow') {
+    document.querySelectorAll('#vacwhen button').forEach(b => b.classList.toggle('on', b === el));
+    $('#vacstartwrap').hidden = el.dataset.v === 'now'; return;
+  }
+  if (act === 'vacgo') {
+    const later = !$('#vacstartwrap').hidden;
+    const body = { end: new Date($('#vacend').value).toISOString(), lower: Number($('#vaclower').value), upper: Number($('#vacupper').value) };
+    if (later) body.start = new Date($('#vacstart').value).toISOString();
+    busy = true; render();
+    try { data = await api(tUrl(t, '/vacation'), body); toast(later ? 'Vacation scheduled' : 'Vacation hold started'); }
+    catch (err) { toast('Failed: ' + err.message); }
+    finally { busy = false; render(); }
+    return;
+  }
+  if (act === 'vacend') {
+    busy = true; render();
+    try { data = await api(tUrl(t, '/vacation'), {}, 'DELETE'); toast('Vacation ended. Schedule restored.'); }
+    catch (err) { toast('Failed: ' + err.message); }
+    finally { busy = false; render(); }
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.dataset.act === 'schedtoggle') {
+    const on = el.checked;
+    return quick({ scheduleEnabled: on }, on ? 'Schedule on' : 'Schedule off', x => { x.scheduleEnabled = on; });
+  }
+  if (el.dataset.act === 'ed') {
+    const entry = sched.days[schedDay][Number(el.dataset.i)]; const f = el.dataset.f;
+    if (f === 'start') { if (!el.value) return; entry.start = toMin(el.value); sched.days[schedDay].sort((a, b) => a.start - b.start); }
+    else if (f === 'lower' || f === 'upper') entry[f] = Number(el.value);
+    else entry[f] = el.value || null;
+    render();
+  }
+});
+
+$('#refresh').addEventListener('click', () => load(true));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+setInterval(() => {
+  const editing = document.activeElement && /INPUT|SELECT/.test(document.activeElement.tagName);
+  if (!document.hidden && !Object.keys(pending).length && !editing) load();
+}, 20000);
+window.addEventListener('beforeunload', (e) => { if (schedDirty()) { e.preventDefault(); e.returnValue = ''; } });
+load();
+</script>
+</body>
+</html>

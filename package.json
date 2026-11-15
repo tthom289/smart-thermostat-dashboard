@@ -1,0 +1,11 @@
+{
+  "name": "smart-thermostat-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local web control for the Amazon Smart Thermostat via the Alexa cloud",
+  "main": "app/server.js",
+  "scripts": { "start": "node app/server.js" },
+  "dependencies": {
+    "alexa-remote2": "8.1.1"
+  }
+}
